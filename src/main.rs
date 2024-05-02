@@ -125,7 +125,10 @@ async fn select_music(body: SelectQuery) -> Result<impl warp::Reply, warp::Rejec
     }
     let session_id = Uuid::new_v4().to_string();
 
-    SESSION_CHOICES.lock().unwrap().insert(session_id.clone(), session);
+    match SESSION_CHOICES.lock() {
+        Ok(mut guard) => guard.insert(session_id.clone(), session),
+        Err(_) => return Ok(warp::reply::json(&"Failed to lock mutex".to_string())),
+    };
 
     Ok(warp::reply::json(&session_id))
 }
