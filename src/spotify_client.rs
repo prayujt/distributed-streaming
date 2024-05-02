@@ -23,7 +23,7 @@ pub struct Track {
 
 #[derive(Deserialize, Serialize, Debug)]
 pub struct Album {
-    id: String,
+    pub id: String,
     pub release_date: String,
     pub name: String,
     pub artists: Vec<Artist>,
@@ -31,7 +31,7 @@ pub struct Album {
 
 #[derive(Deserialize, Serialize, Debug)]
 pub struct Artist {
-    id: String,
+    pub id: String,
     pub name: String,
 }
 
