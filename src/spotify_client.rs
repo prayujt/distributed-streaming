@@ -4,32 +4,35 @@ use serde_json::Value;
 
 #[derive(Deserialize, Serialize, Debug)]
 pub struct SpotifySearchResponse {
-    tracks: Option<Items<Track>>,
-    albums: Option<Items<Album>>,
-    artists: Option<Items<Artist>>,
+    pub tracks: Option<Items<Track>>,
+    pub albums: Option<Items<Album>>,
+    pub artists: Option<Items<Artist>>,
 }
 
 #[derive(Deserialize, Serialize, Debug)]
 pub struct Items<T> {
-    items: Vec<T>,
+    pub items: Vec<T>,
 }
 
 #[derive(Deserialize, Serialize, Debug)]
 pub struct Track {
-    id: String,
-    name: String,
+    pub id: String,
+    pub name: String,
+    pub album: Album,
 }
 
 #[derive(Deserialize, Serialize, Debug)]
 pub struct Album {
     id: String,
-    name: String,
+    pub release_date: String,
+    pub name: String,
+    pub artists: Vec<Artist>,
 }
 
 #[derive(Deserialize, Serialize, Debug)]
 pub struct Artist {
     id: String,
-    name: String,
+    pub name: String,
 }
 
 pub struct SpotifyClient {

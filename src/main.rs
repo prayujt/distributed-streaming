@@ -5,6 +5,11 @@
 // use futures::future::try_join_all;
 use serde::Deserialize;
 use serde_json::from_value;
+use urlencoding::encode;
+
+use warp::Filter;
+
+use std::cmp;
 use std::env;
 
 mod spotify_client;
@@ -16,36 +21,6 @@ use crate::spotify_client::{SpotifyClient, SpotifySearchResponse};
 struct Query {
     titles: String,
 }
-
-// #[tokio::main]
-// async fn main() -> tide::Result<()> {
-//     let mut app = tide::new();
-//     app.at("/select").post(select_music);
-//     app.listen("0.0.0.0:8080").await?;
-//     Ok(())
-// }
-
-// async fn select_music(mut req: Request<()>) -> tide::Result {
-//     let client_id = env::var("SPOTIFY_CLIENT_ID").expect("Expected a client id");
-//     let secret = env::var("SPOTIFY_CLIENT_SECRET").expect("Expected a secret");
-//     let client = SpotifyClient::new(client_id, secret);
-
-//     let Query { titles } = req.body_json().await?;
-//     let titles = titles.split('\n');
-
-//     for title in titles {
-//         match client.api_req(&format!("/search?q={}", title.trim())).await {
-//             Ok(res) => {
-//                 println!("{:?}", res);
-//             }
-//             Err(e) => println!("Error: {:?}", e),
-//         }
-//     }
-
-//     Ok("".into())
-// }
-
-use warp::Filter;
 
 #[tokio::main]
 async fn main() {
@@ -69,7 +44,7 @@ async fn select_music(body: Query) -> Result<impl warp::Reply, warp::Rejection> 
         match client
             .api_req(&format!(
                 "/search?q={}&type=track,album,artist",
-                title.trim()
+                encode(title.trim())
             ))
             .await
         {
@@ -81,6 +56,38 @@ async fn select_music(body: Query) -> Result<impl warp::Reply, warp::Rejection> 
         }
     }
 
-    println!("{:?}", results);
+    for result in results {
+        let tracks = result.tracks.unwrap().items;
+        let albums = result.albums.unwrap().items;
+        let artists = result.artists.unwrap().items;
+
+        let mut track_count = 10;
+        let mut album_count = 5;
+        let mut artist_count = 3;
+
+        if albums.len() < album_count {
+            track_count += album_count - albums.len();
+            album_count = albums.len();
+        }
+        if artists.len() < artist_count {
+            track_count += artist_count - artists.len();
+            artist_count = artists.len();
+        }
+
+        for i in 0..cmp::min(track_count, tracks.len()) {
+            println!(
+                "{} - {} [{}]",
+                tracks[i].name, tracks[i].album.artists[0].name, tracks[i].album.name
+            );
+        }
+        for i in 0..cmp::min(album_count, albums.len()) {
+            println!("Album: {}", albums[i].name);
+        }
+        for i in 0..cmp::min(artist_count, artists.len()) {
+            println!("Artist: {}", artists[i].name);
+        }
+    }
+
+    // println!("{:?}", results);
     Ok(warp::reply::json(&""))
 }
