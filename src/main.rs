@@ -27,7 +27,7 @@ struct DownloadQuery {
     session_id: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Choice {
     r#type: String,
     id: String,
@@ -137,21 +137,55 @@ async fn download_music(body: DownloadQuery) -> Result<impl warp::Reply, warp::R
     let session_id = body.session_id;
     let indices: Vec<i8> = body.indices;
 
-    let mutex_guard = match SESSION_CHOICES.lock() {
-        Ok(guard) => guard,
-        Err(_) => return Ok(warp::reply::json(&"Failed to lock mutex".to_string())),
-    };
+    let session = {
+        let mut mutex_guard = match SESSION_CHOICES.lock() {
+            Ok(guard) => guard,
+            Err(_) => return Ok(warp::reply::json(&"Failed to lock mutex".to_string())),
+        };
 
-    let session = match mutex_guard.get(&session_id) {
-        Some(session) => session,
-        None => return Ok(warp::reply::json(&"Session not found".to_string())),
+        match mutex_guard.remove(&session_id) {
+            Some(session) => session,
+            None => return Ok(warp::reply::json(&"Session not found".to_string())),
+        }
     };
 
     let it = indices.iter().zip(session.iter());
 
     for (_, (idx, choices)) in it.enumerate() {
         let choice = &choices[*idx as usize];
-        println!("{}: {}",choice.r#type, choice.id);
+
+        match choice.r#type.as_str() {
+            "track" => {
+                println!("Downloading track: {}", choice.id);
+            }
+            "album" => {
+                let client_id = env::var("SPOTIFY_CLIENT_ID").expect("Expected a client id");
+                let secret = env::var("SPOTIFY_CLIENT_SECRET").expect("Expected a secret");
+                let client = SpotifyClient::new(client_id, secret);
+                match client
+                    .api_req(&format!(
+                        "/albums/{}/tracks", choice.id
+                    ))
+                    .await
+                {
+                    Ok(res) => match from_value::<SpotifySearchResponse>(res) {
+                        Ok(result) => {
+                            println!("Album: {:?}", result);
+                        },
+                        Err(e) => println!("Failed to parse JSON: {:?}", e),
+                    },
+                    Err(e) => println!("Error: {:?}", e),
+                }
+
+                println!("Downloading album: {}", choice.id);
+            }
+            "artist" => {
+                println!("Downloading artist: {}", choice.id);
+            }
+            _ => {
+                println!("Unknown type: {}", choice.r#type);
+            }
+        }
     }
     Ok(warp::reply::json(&session_id))
 }
