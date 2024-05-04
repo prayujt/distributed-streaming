@@ -14,7 +14,7 @@ use lazy_static::lazy_static;
 use warp::Filter;
 
 mod spotify_client;
-use crate::spotify_client::{Items, SpotifyClient, SpotifySearchResponse, Track};
+use crate::spotify_client::{AlbumTrack, ArtistAlbum, Items, SpotifyClient, SpotifySearchResponse};
 
 #[derive(Debug, Deserialize)]
 struct SelectQuery {
@@ -175,39 +175,62 @@ async fn download_music(body: DownloadQuery) -> Result<impl warp::Reply, warp::R
 
     let it = indices.iter().zip(session.iter());
 
+    let client_id = env::var("SPOTIFY_CLIENT_ID").expect("Expected a client id");
+    let secret = env::var("SPOTIFY_CLIENT_SECRET").expect("Expected a secret");
+    let client = SpotifyClient::new(client_id, secret);
+
     for (_, (idx, choices)) in it.enumerate() {
         let choice = &choices[*idx as usize];
 
         match choice.r#type.as_str() {
-            "track" => {
-                println!("Downloading track: {}", choice.id);
-            }
-            "album" => {
-                let client_id = env::var("SPOTIFY_CLIENT_ID").expect("Expected a client id");
-                let secret = env::var("SPOTIFY_CLIENT_SECRET").expect("Expected a secret");
-                let client = SpotifyClient::new(client_id, secret);
-                match client
-                    .api_req(&format!("/albums/{}/tracks", choice.id))
-                    .await
-                {
-                    Ok(res) => match from_value::<Items<Track>>(res) {
-                        Ok(result) => {
-                            println!("Album: {:?}", result);
-                        }
-                        Err(e) => println!("Failed to parse JSON: {:?}", e),
-                    },
-                    Err(e) => println!("Error: {:?}", e),
-                }
-
-                println!("Downloading album: {}", choice.id);
-            }
-            "artist" => {
-                println!("Downloading artist: {}", choice.id);
-            }
+            "track" => process_track(choice.id.clone(), &client).await,
+            "album" => process_album(choice.id.clone(), &client).await,
+            "artist" => process_artist(choice.id.clone(), &client).await,
             _ => {
                 println!("Unknown type: {}", choice.r#type);
             }
         }
     }
     Ok(warp::reply::json(&session_id))
+}
+
+async fn process_track(track_id: String, _client: &SpotifyClient) {
+    /* Spawn new Kubernetes pod for track downloading */
+    println!("Downloading track: {}", track_id);
+}
+
+async fn process_album(album_id: String, client: &SpotifyClient) {
+    println!("Downloading album: {}", album_id);
+    match client
+        .api_req(&format!("/albums/{}/tracks", album_id))
+        .await
+    {
+        Ok(res) => match from_value::<Items<AlbumTrack>>(res) {
+            Ok(tracks) => {
+                for track in tracks.items {
+                    process_track(track.id, client).await;
+                }
+            }
+            Err(e) => println!("Failed to parse JSON: {:?}", e),
+        },
+        Err(e) => println!("Error: {:?}", e),
+    }
+}
+
+async fn process_artist(artist_id: String, client: &SpotifyClient) {
+    println!("Downloading artist: {}", artist_id);
+    match client
+        .api_req(&format!("/artists/{}/albums", artist_id))
+        .await
+    {
+        Ok(res) => match from_value::<Items<ArtistAlbum>>(res) {
+            Ok(albums) => {
+                for album in albums.items {
+                    process_album(album.id, client).await;
+                }
+            }
+            Err(e) => println!("Failed to parse JSON: {:?}", e),
+        },
+        Err(e) => println!("Error: {:?}", e),
+    }
 }

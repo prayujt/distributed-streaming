@@ -35,6 +35,18 @@ pub struct Artist {
     pub name: String,
 }
 
+#[derive(Deserialize, Serialize, Debug)]
+pub struct AlbumTrack {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Deserialize, Serialize, Debug)]
+pub struct ArtistAlbum {
+    pub id: String,
+    pub name: String,
+}
+
 pub struct SpotifyClient {
     client_id: String,
     secret: String,
