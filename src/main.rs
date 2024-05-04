@@ -1,6 +1,6 @@
 use std::cmp;
-use std::env;
 use std::collections::HashMap;
+use std::env;
 use std::sync::Mutex;
 
 use dotenv;
@@ -10,11 +10,11 @@ use serde_json::from_value;
 use urlencoding::encode;
 use uuid::Uuid;
 
-use warp::Filter;
 use lazy_static::lazy_static;
+use warp::Filter;
 
 mod spotify_client;
-use crate::spotify_client::{SpotifyClient, SpotifySearchResponse};
+use crate::spotify_client::{Items, SpotifyClient, SpotifySearchResponse, Track};
 
 #[derive(Debug, Deserialize)]
 struct SelectQuery {
@@ -34,7 +34,8 @@ struct Choice {
 }
 
 lazy_static! {
-    static ref SESSION_CHOICES: Mutex<HashMap<String, Vec<Vec<Choice>>>> = Mutex::new(HashMap::new());
+    static ref SESSION_CHOICES: Mutex<HashMap<String, Vec<Vec<Choice>>>> =
+        Mutex::new(HashMap::new());
 }
 
 #[tokio::main]
@@ -49,6 +50,29 @@ async fn main() {
         .and(warp::body::json())
         .and_then(download_music);
     let routes = select_route.or(download_route);
+
+    let _ = select_music(SelectQuery {
+        titles: "now that we dont talk".to_string(),
+    })
+    .await;
+
+    let session_id = {
+        match SESSION_CHOICES.lock() {
+            Ok(guard) => {
+                if let Some(key) = guard.keys().next() {
+                    key.clone()
+                } else {
+                    String::new()
+                }
+            }
+            Err(_) => String::new(),
+        }
+    };
+    let _ = download_music(DownloadQuery {
+        indices: vec![12],
+        session_id,
+    })
+    .await;
 
     warp::serve(routes).run(([0, 0, 0, 0], 8080)).await;
 }
@@ -163,15 +187,13 @@ async fn download_music(body: DownloadQuery) -> Result<impl warp::Reply, warp::R
                 let secret = env::var("SPOTIFY_CLIENT_SECRET").expect("Expected a secret");
                 let client = SpotifyClient::new(client_id, secret);
                 match client
-                    .api_req(&format!(
-                        "/albums/{}/tracks", choice.id
-                    ))
+                    .api_req(&format!("/albums/{}/tracks", choice.id))
                     .await
                 {
-                    Ok(res) => match from_value::<SpotifySearchResponse>(res) {
+                    Ok(res) => match from_value::<Items<Track>>(res) {
                         Ok(result) => {
                             println!("Album: {:?}", result);
-                        },
+                        }
                         Err(e) => println!("Failed to parse JSON: {:?}", e),
                     },
                     Err(e) => println!("Error: {:?}", e),
