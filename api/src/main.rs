@@ -210,7 +210,7 @@ async fn process_track(track_id: String, _client: &SpotifyClient) {
             containers: vec![
                 Container {
                     name: "downloader".to_string(),
-                    image: Some("distributed-streaming-downloader".to_string()),
+                    image: Some("docker.prayujt.com/distributed-streaming-downloader".to_string()),
                     env: Some(vec![
                         EnvVar {
                             name: "TRACK_IDS".to_string(),
