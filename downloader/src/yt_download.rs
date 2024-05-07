@@ -19,7 +19,10 @@ pub fn download_track(track: &Track, url: String) {
     let output_path = path.join(format!("{}.mp3", track.name));
 
     let output = Command::new("yt-dlp")
+        .arg("-q")
         .arg("-x")
+        .arg("--audio-quality")
+        .arg("0")
         .arg("--audio-format")
         .arg("mp3")
         .arg("-o")
