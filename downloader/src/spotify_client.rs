@@ -11,6 +11,7 @@ pub struct Tracks {
 pub struct Track {
     pub id: String,
     pub name: String,
+    pub track_number: u32,
     pub album: Album,
 }
 
@@ -20,12 +21,20 @@ pub struct Album {
     pub release_date: String,
     pub name: String,
     pub artists: Vec<Artist>,
+    pub images: Vec<Image>,
 }
 
 #[derive(Deserialize, Serialize, Debug)]
 pub struct Artist {
     pub id: String,
     pub name: String,
+}
+
+#[derive(Deserialize, Serialize, Debug)]
+pub struct Image {
+    pub url: String,
+    pub height: u32,
+    pub width: u32,
 }
 
 pub struct SpotifyClient {
