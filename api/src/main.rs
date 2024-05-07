@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::{env,cmp,fs};
 use std::sync::Mutex;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{from_value};
 use urlencoding::encode;
 use uuid::Uuid;
@@ -27,10 +27,16 @@ struct DownloadQuery {
     session_id: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 struct Choice {
     r#type: String,
     id: String,
+}
+
+#[derive(Serialize)]
+struct SelectResponse {
+    session_id: String,
+    choices: Vec<Vec<Choice>>, // Assuming Choice is already defined and has Serialize derived
 }
 
 lazy_static! {
@@ -150,11 +156,16 @@ async fn select_music(body: SelectQuery) -> Result<impl warp::Reply, warp::Rejec
     let session_id = Uuid::new_v4().to_string();
 
     match SESSION_CHOICES.lock() {
-        Ok(mut guard) => guard.insert(session_id.clone(), session),
+        Ok(mut guard) => guard.insert(session_id.clone(), session.clone()),
         Err(_) => return Ok(warp::reply::json(&"Failed to lock mutex".to_string())),
     };
 
-    Ok(warp::reply::json(&session_id))
+    let response = SelectResponse {
+        session_id,
+        choices: session,
+    };
+
+    Ok(warp::reply::json(&response))
 }
 
 async fn download_music(body: DownloadQuery) -> Result<impl warp::Reply, warp::Rejection> {
@@ -227,6 +238,11 @@ async fn process_track(track_id: String, _client: &SpotifyClient) {
                         EnvVar {
                             name: "SPOTIFY_CLIENT_SECRET".to_string(),
                             value: Some(env::var("SPOTIFY_CLIENT_SECRET").unwrap_or_default()),
+                            ..Default::default()
+                        },
+                        EnvVar {
+                            name: "MUSIC_HOME".to_string(),
+                            value: Some("/music".to_string()),
                             ..Default::default()
                         },
                     ]),
