@@ -1,14 +1,14 @@
-use std::cmp;
 use std::collections::HashMap;
-use std::env;
+use std::{env,cmp,fs};
 use std::sync::Mutex;
 
-use dotenv;
-
 use serde::Deserialize;
-use serde_json::from_value;
+use serde_json::{from_value};
 use urlencoding::encode;
 use uuid::Uuid;
+
+use kube::{api::{Api, PostParams}, Client};
+use k8s_openapi::api::core::v1::{Pod, Container, PodSpec, EnvVar};
 
 use lazy_static::lazy_static;
 use warp::Filter;
@@ -52,7 +52,7 @@ async fn main() {
     let routes = select_route.or(download_route);
 
     let _ = select_music(SelectQuery {
-        titles: "now that we dont talk".to_string(),
+        titles: "taylor swift".to_string(),
     })
     .await;
 
@@ -69,7 +69,7 @@ async fn main() {
         }
     };
     let _ = download_music(DownloadQuery {
-        indices: vec![13],
+        indices: vec![15],
         session_id,
     })
     .await;
@@ -179,7 +179,7 @@ async fn download_music(body: DownloadQuery) -> Result<impl warp::Reply, warp::R
     let secret = env::var("SPOTIFY_CLIENT_SECRET").expect("Expected a secret");
     let client = SpotifyClient::new(client_id, secret);
 
-    for (_, (idx, choices)) in it.enumerate() {
+    for (idx, choices) in it {
         let choice = &choices[*idx as usize];
 
         match choice.r#type.as_str() {
@@ -197,6 +197,40 @@ async fn download_music(body: DownloadQuery) -> Result<impl warp::Reply, warp::R
 async fn process_track(track_id: String, _client: &SpotifyClient) {
     /* Spawn new Kubernetes pod for track downloading */
     println!("Downloading track: {}", track_id);
+    let namespace = get_kubernetes_namespace().unwrap_or_else(|_| "default".to_string());
+    let client = Client::try_default().await.expect("Failed to create K8s client");
+    let pods: Api<Pod> = Api::namespaced(client, &namespace);
+
+    let pod = Pod {
+        metadata: kube::api::ObjectMeta {
+            name: Some(format!("downloader-{}", track_id)),
+            ..Default::default()
+        },
+        spec: Some(PodSpec {
+            containers: vec![
+                Container {
+                    name: "downloader".to_string(),
+                    image: Some("docker.prayujt.com/distributed-streaming-downloader".to_string()),
+                    env: Some(vec![
+                        EnvVar {
+                            name: "TRACK_IDS".to_string(),
+                            value: Some(track_id),
+                            ..Default::default()
+                        },
+                    ]),
+                    ..Default::default()
+                },
+            ],
+            restart_policy: Some("Never".to_string()),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    match pods.create(&PostParams::default(), &pod).await {
+        Ok(_) => println!("Pod created successfully."),
+        Err(e) => println!("Failed to create pod: {:?}", e),
+    }
 }
 
 async fn process_album(album_id: String, client: &SpotifyClient) {
@@ -233,4 +267,8 @@ async fn process_artist(artist_id: String, client: &SpotifyClient) {
         },
         Err(e) => println!("Error: {:?}", e),
     }
+}
+
+fn get_kubernetes_namespace() -> Result<String, std::io::Error> {
+    fs::read_to_string("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
 }
