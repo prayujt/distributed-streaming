@@ -6,6 +6,8 @@ use std::process::Command;
 use id3::frame::{Content, PictureType};
 use id3::{frame, Frame, Tag, TagLike, Version};
 
+use sha2::{Digest, Sha256};
+
 use crate::spotify_client::Track;
 
 pub fn download_track(track: &Track, url: String) {
@@ -16,7 +18,13 @@ pub fn download_track(track: &Track, url: String) {
         .join(&track.album.name);
 
     fs::create_dir_all(&path).expect("Failed to create directories");
-    let output_path = path.join(format!("{}.mp3", track.name));
+
+    /* Hash the track name to prevent invalid file names
+     * when the track contains special characters */
+    let mut hasher = Sha256::new();
+    hasher.update(&track.name);
+    let track_name_hash = format!("{:x}", hasher.finalize());
+    let output_path = path.join(format!("{}.mp3", track_name_hash));
 
     let output = Command::new("yt-dlp")
         .arg("-q")
