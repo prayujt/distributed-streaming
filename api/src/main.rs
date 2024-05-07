@@ -69,7 +69,7 @@ async fn main() {
         }
     };
     let _ = download_music(DownloadQuery {
-        indices: vec![12],
+        indices: vec![13],
         session_id,
     })
     .await;
