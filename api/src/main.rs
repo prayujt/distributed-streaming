@@ -51,28 +51,28 @@ async fn main() {
         .and_then(download_music);
     let routes = select_route.or(download_route);
 
-    let _ = select_music(SelectQuery {
-        titles: "taylor swift".to_string(),
-    })
-    .await;
+    // let _ = select_music(SelectQuery {
+    //     titles: "taylor swift".to_string(),
+    // })
+    // .await;
 
-    let session_id = {
-        match SESSION_CHOICES.lock() {
-            Ok(guard) => {
-                if let Some(key) = guard.keys().next() {
-                    key.clone()
-                } else {
-                    String::new()
-                }
-            }
-            Err(_) => String::new(),
-        }
-    };
-    let _ = download_music(DownloadQuery {
-        indices: vec![15],
-        session_id,
-    })
-    .await;
+    // let session_id = {
+    //     match SESSION_CHOICES.lock() {
+    //         Ok(guard) => {
+    //             if let Some(key) = guard.keys().next() {
+    //                 key.clone()
+    //             } else {
+    //                 String::new()
+    //             }
+    //         }
+    //         Err(_) => String::new(),
+    //     }
+    // };
+    // let _ = download_music(DownloadQuery {
+    //     indices: vec![15],
+    //     session_id,
+    // })
+    // .await;
 
     warp::serve(routes).run(([0, 0, 0, 0], 8080)).await;
 }
@@ -201,9 +201,11 @@ async fn process_track(track_id: String, _client: &SpotifyClient) {
     let client = Client::try_default().await.expect("Failed to create K8s client");
     let pods: Api<Pod> = Api::namespaced(client, &namespace);
 
+    let uuid = Uuid::new_v4().to_string().to_lowercase();
+    let pod_name = format!("downloader-{}", uuid);
     let pod = Pod {
         metadata: kube::api::ObjectMeta {
-            name: Some(format!("downloader-{}", track_id)),
+            name: Some(pod_name),
             ..Default::default()
         },
         spec: Some(PodSpec {
