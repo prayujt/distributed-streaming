@@ -3,11 +3,13 @@ use std::process::Command;
 
 use dotenv;
 
-// use serde::Deserialize;
 use serde_json::from_value;
 
 mod spotify_client;
 use crate::spotify_client::{SpotifyClient, Tracks};
+
+mod yt_download;
+use crate::yt_download::download_track;
 
 fn search_yt_music(
     track_name: &String,
@@ -42,8 +44,8 @@ async fn main() {
     let secret = env::var("SPOTIFY_CLIENT_SECRET").expect("Expected a secret");
     let client = SpotifyClient::new(client_id, secret);
 
-    let mut track_ids = env::var("TRACK_IDS").expect("Expected track ids");
-    track_ids = track_ids.split(",").map(|s| s.to_string()).collect();
+    let track_ids = env::var("TRACK_IDS").expect("Expected track ids");
+    // track_ids = track_ids.split(",").map(|s| s.to_string()).collect();
 
     let tracks = match client.api_req(&format!("/tracks?ids={}", track_ids)).await {
         Ok(res) => match from_value::<Tracks>(res) {
@@ -64,11 +66,16 @@ async fn main() {
         let album_name = &track.album.name;
         let artist_name = &track.album.artists[0].name;
 
-        println!("Searching for: {} - {} - {}", artist_name, album_name, track_name);
+        println!(
+            "Searching for: {} - {} - {}",
+            artist_name, album_name, track_name
+        );
 
         match search_yt_music(&track_name, &album_name, &artist_name) {
-            Ok(output) => println!("Script output: {}", output),
-            Err(e) => println!("Error running script: {}", e),
-        }
+            Ok(url) => download_track(&track, url),
+            Err(e) => {
+                println!("Error retrieving yt_music url: {}", e)
+            }
+        };
     }
 }
