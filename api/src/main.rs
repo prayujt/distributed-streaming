@@ -8,7 +8,7 @@ use urlencoding::encode;
 use uuid::Uuid;
 
 use kube::{api::{Api, PostParams}, Client};
-use k8s_openapi::api::core::v1::{Pod, Container, PodSpec, EnvVar};
+use k8s_openapi::api::core::v1::{Pod, Container, PodSpec, EnvVar, Volume, PersistentVolumeClaimVolumeSource};
 
 use lazy_static::lazy_static;
 use warp::Filter;
@@ -246,10 +246,27 @@ async fn process_track(track_id: String, _client: &SpotifyClient) {
                             ..Default::default()
                         },
                     ]),
+                    volume_mounts: Some(vec![
+                        k8s_openapi::api::core::v1::VolumeMount {
+                            name: "music-storage".to_string(), // Must match the volume name defined below
+                            mount_path: "/music".to_string(),
+                            ..Default::default()
+                        },
+                    ]),
                     ..Default::default()
                 },
             ],
-            restart_policy: Some("Never".to_string()),
+            volumes: Some(vec![
+                Volume {
+                    name: "music-storage".to_string(),
+                    persistent_volume_claim: Some(PersistentVolumeClaimVolumeSource {
+                        claim_name: env::var("MUSIC_STORAGE_PVC").unwrap_or("music-storage".to_string()),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            ]),
+            restart_policy: Some("Always".to_string()),
             ..Default::default()
         }),
         ..Default::default()
