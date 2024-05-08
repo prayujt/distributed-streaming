@@ -269,6 +269,10 @@ async fn download_music(body: DownloadQuery) -> Result<impl warp::Reply, warp::R
 async fn process_tracks(track_ids: String) {
     /* Spawn new Kubernetes jobs for track downloading */
     println!("Downloading tracks: {}", track_ids);
+    if env::var("ENVIRONMENT").unwrap_or_else(|_| "development".to_string()).as_str().eq("development")
+    {
+        return;
+    }
     let namespace = get_kubernetes_namespace().unwrap_or_else(|_| "default".to_string());
     let client = Client::try_default().await.expect("Failed to create K8s client");
     let jobs: Api<Job> = Api::namespaced(client, &namespace);
@@ -325,21 +329,37 @@ async fn process_album(album_id: String, client: &SpotifyClient) {
 
 async fn process_artist(artist_id: String, client: &SpotifyClient) {
     println!("Downloading artist: {}", artist_id);
-    let albums = match client
-        .api_req(&format!("/artists/{}/albums", artist_id))
-        .await
-    {
-        Ok(res) => match from_value::<Items<ArtistAlbum>>(res) {
-            Ok(albums) => albums.items,
-            Err(e) => {
-                println!("Failed to parse JSON: {:?}", e);
-                vec![]
+
+    let albums: Vec<ArtistAlbum> = {
+        let mut albums: Vec<ArtistAlbum> = vec![];
+        let mut offset = 0;
+        let limit = 50;
+
+        loop {
+            match client
+                .api_req(&format!("/artists/{}/albums?offset={}&limit={}", artist_id, offset, limit))
+                .await
+            {
+                Ok(res) => match from_value::<Items<ArtistAlbum>>(res) {
+                    Ok(mut result) => {
+                        albums.append(&mut result.items);
+                        if result.items.len() < limit {
+                            break;
+                        }
+                        offset += limit;
+                    }
+                    Err(e) => {
+                        println!("Failed to parse JSON: {:?}", e);
+                        break;
+                    }
+                },
+                Err(e) => {
+                    println!("Error: {:?}", e);
+                    break;
+                }
             }
-        },
-        Err(e) => {
-            println!("Error: {:?}", e);
-            vec![]
         }
+        albums
     };
 
     let mut all_tracks: Vec<AlbumTrack> = vec![];
