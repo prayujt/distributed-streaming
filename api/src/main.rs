@@ -24,7 +24,7 @@ mod spotify_client;
 use crate::spotify_client::{AlbumTrack, ArtistAlbum, Items, SpotifyClient, SpotifySearchResponse};
 
 mod podcast_client;
-use crate::podcast_client::{PodcastClient, PodcastSearchResult};
+use crate::podcast_client::{PodcastClient, PodcastSearchResult, PodcastEpisodes};
 
 #[derive(Debug, Deserialize)]
 struct SelectQuery {
@@ -304,6 +304,68 @@ async fn download(body: DownloadQuery) -> Result<impl warp::Reply, warp::Rejecti
 
 async fn process_podcast(podcast_id: String) {
     /* Spawn new Kubernetes jobs for podcast downloading */
+    println!("Downloading podcast: {}", podcast_id);
+    let api_key = env::var("PODCAST_API_KEY").expect("Expected a podcast client id");
+    let secret = env::var("PODCAST_SECRET").expect("Expected a podcast secret");
+    let client = PodcastClient::new(api_key, secret);
+
+    let episodes: PodcastEpisodes = match client
+        .api_req(&format!(
+            "/episodes/byfeedid?id={}&max=1000",
+            encode(podcast_id.as_str())
+        ))
+        .await {
+            Ok(res) => match from_value::<PodcastEpisodes>(res) {
+                Ok(result) => result,
+                Err(e) => {
+                    println!("Failed to parse JSON: {:?}", e);
+                    return;
+                }
+            },
+            Err(e) => {
+                println!("Error: {:?}", e);
+                return;
+            }
+        };
+
+    if env::var("ENVIRONMENT").unwrap_or_else(|_| "development".to_string()).as_str().eq("development")
+    {
+        return;
+    }
+    let namespace = get_kubernetes_namespace().unwrap_or_else(|_| "default".to_string());
+    let client = Client::try_default().await.expect("Failed to create K8s client");
+    let jobs: Api<Job> = Api::namespaced(client, &namespace);
+
+    let max_jobs: usize = env::var("NUM_WORKERS")
+        .unwrap_or_else(|_| "8".to_string())
+        .parse()
+        .unwrap_or(8);
+
+    // loop {
+    //     let current_jobs = jobs.list(&ListParams::default()).await
+    //         .expect("Failed to list jobs")
+    //         .items
+    //         .into_iter()
+    //         .filter(|job| job.status.as_ref().map_or(false, |status| status.active.unwrap_or(0) > 0))
+    //         .count();
+
+    //     if current_jobs < max_jobs {
+    //         let job = create_job_spec(track_ids.clone());
+    //         match jobs.create(&PostParams::default(), &job).await {
+    //             Ok(_) => {
+    //                 println!("Job created successfully.");
+    //                 break;
+    //             },
+    //             Err(e) => {
+    //                 println!("Failed to create job: {:?}", e);
+    //                 sleep(Duration::from_secs(10)).await;
+    //             }
+    //         }
+    //     } else {
+    //         println!("Job limit reached. Waiting to retry...");
+    //         sleep(Duration::from_secs(5)).await;
+    //     }
+    // }
 }
 
 async fn process_tracks(track_ids: String) {

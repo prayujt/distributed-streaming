@@ -10,6 +10,11 @@ pub struct PodcastSearchResult {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct PodcastInfo {
+    pub feed: PodcastFeed,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct PodcastFeed {
     pub id: i64,
     pub title: String,
@@ -17,6 +22,20 @@ pub struct PodcastFeed {
     pub description: String,
     pub url: String,
     pub artwork: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PodcastEpisodes {
+   pub items: Vec<Episode>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Episode {
+    pub id: i64,
+    pub title: String,
+    pub link: String,
+    pub description: String,
+    pub enclosureUrl: String,
 }
 
 pub struct PodcastClient {
