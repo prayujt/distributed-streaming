@@ -7,8 +7,12 @@ use serde_json::{from_value};
 use urlencoding::encode;
 use uuid::Uuid;
 
-use kube::{api::{Api, PostParams}, Client};
-use k8s_openapi::api::core::v1::{Pod, Container, PodSpec, EnvVar, Volume, PersistentVolumeClaimVolumeSource};
+use k8s_openapi::api::batch::v1::{Job, JobSpec};
+use kube::{
+    api::{Api, PostParams, ObjectMeta},
+    Client,
+};
+use k8s_openapi::api::core::v1::{PodTemplateSpec, Container, EnvVar, Volume, PersistentVolumeClaimVolumeSource};
 
 use lazy_static::lazy_static;
 use warp::Filter;
@@ -56,29 +60,6 @@ async fn main() {
         .and(warp::body::json())
         .and_then(download_music);
     let routes = select_route.or(download_route);
-
-    // let _ = select_music(SelectQuery {
-    //     titles: "taylor swift".to_string(),
-    // })
-    // .await;
-
-    // let session_id = {
-    //     match SESSION_CHOICES.lock() {
-    //         Ok(guard) => {
-    //             if let Some(key) = guard.keys().next() {
-    //                 key.clone()
-    //             } else {
-    //                 String::new()
-    //             }
-    //         }
-    //         Err(_) => String::new(),
-    //     }
-    // };
-    // let _ = download_music(DownloadQuery {
-    //     indices: vec![15],
-    //     session_id,
-    // })
-    // .await;
 
     warp::serve(routes).run(([0, 0, 0, 0], 8080)).await;
 }
@@ -206,75 +187,86 @@ async fn download_music(body: DownloadQuery) -> Result<impl warp::Reply, warp::R
 }
 
 async fn process_track(track_id: String, _client: &SpotifyClient) {
-    /* Spawn new Kubernetes pod for track downloading */
+    /* Spawn new Kubernetes job for track downloading */
     println!("Downloading track: {}", track_id);
     let namespace = get_kubernetes_namespace().unwrap_or_else(|_| "default".to_string());
     let client = Client::try_default().await.expect("Failed to create K8s client");
-    let pods: Api<Pod> = Api::namespaced(client, &namespace);
+    let jobs: Api<Job> = Api::namespaced(client, &namespace);
 
     let uuid = Uuid::new_v4().to_string().to_lowercase();
-    let pod_name = format!("downloader-{}", uuid);
-    let pod = Pod {
-        metadata: kube::api::ObjectMeta {
-            name: Some(pod_name),
+    let job_name = format!("downloader-{}", uuid);
+
+    let job = Job {
+        metadata: ObjectMeta {
+            name: Some(job_name),
             ..Default::default()
         },
-        spec: Some(PodSpec {
-            containers: vec![
-                Container {
-                    name: "downloader".to_string(),
-                    image: Some("docker.prayujt.com/distributed-streaming-downloader".to_string()),
-                    env: Some(vec![
-                        EnvVar {
-                            name: "TRACK_IDS".to_string(),
-                            value: Some(track_id),
+        spec: Some(JobSpec {
+            template: PodTemplateSpec {
+                metadata: Some(ObjectMeta {
+                    ..Default::default()
+                }),
+                spec: Some(k8s_openapi::api::core::v1::PodSpec {
+                    restart_policy: Some("Never".to_string()),
+                    containers: vec![
+                        Container {
+                            name: "downloader".to_string(),
+                            image: Some("docker.prayujt.com/distributed-streaming-downloader".to_string()),
+                            env: Some(vec![
+                                EnvVar {
+                                    name: "TRACK_IDS".to_string(),
+                                    value: Some(track_id),
+                                    ..Default::default()
+                                },
+                                EnvVar {
+                                    name: "SPOTIFY_CLIENT_ID".to_string(),
+                                    value: Some(env::var("SPOTIFY_CLIENT_ID").unwrap_or_default()),
+                                    ..Default::default()
+                                },
+                                EnvVar {
+                                    name: "SPOTIFY_CLIENT_SECRET".to_string(),
+                                    value: Some(env::var("SPOTIFY_CLIENT_SECRET").unwrap_or_default()),
+                                    ..Default::default()
+                                },
+                                EnvVar {
+                                    name: "MUSIC_HOME".to_string(),
+                                    value: Some("/music".to_string()),
+                                    ..Default::default()
+                                },
+                            ]),
+                            volume_mounts: Some(vec![
+                                k8s_openapi::api::core::v1::VolumeMount {
+                                    name: "music-storage".to_string(),
+                                    mount_path: "/music".to_string(),
+                                    ..Default::default()
+                                },
+                            ]),
                             ..Default::default()
                         },
-                        EnvVar {
-                            name: "SPOTIFY_CLIENT_ID".to_string(),
-                            value: Some(env::var("SPOTIFY_CLIENT_ID").unwrap_or_default()),
-                            ..Default::default()
-                        },
-                        EnvVar {
-                            name: "SPOTIFY_CLIENT_SECRET".to_string(),
-                            value: Some(env::var("SPOTIFY_CLIENT_SECRET").unwrap_or_default()),
-                            ..Default::default()
-                        },
-                        EnvVar {
-                            name: "MUSIC_HOME".to_string(),
-                            value: Some("/music".to_string()),
-                            ..Default::default()
-                        },
-                    ]),
-                    volume_mounts: Some(vec![
-                        k8s_openapi::api::core::v1::VolumeMount {
-                            name: "music-storage".to_string(), // Must match the volume name defined below
-                            mount_path: "/music".to_string(),
+                    ],
+                    volumes: Some(vec![
+                        Volume {
+                            name: "music-storage".to_string(),
+                            persistent_volume_claim: Some(PersistentVolumeClaimVolumeSource {
+                                claim_name: env::var("MUSIC_STORAGE_PVC").unwrap_or("music-storage".to_string()),
+                                ..Default::default()
+                            }),
                             ..Default::default()
                         },
                     ]),
                     ..Default::default()
-                },
-            ],
-            volumes: Some(vec![
-                Volume {
-                    name: "music-storage".to_string(),
-                    persistent_volume_claim: Some(PersistentVolumeClaimVolumeSource {
-                        claim_name: env::var("MUSIC_STORAGE_PVC").unwrap_or("music-storage".to_string()),
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                },
-            ]),
-            restart_policy: Some("Always".to_string()),
+                }),
+            },
+            backoff_limit: Some(0),
+            ttl_seconds_after_finished: Some(10),
             ..Default::default()
         }),
         ..Default::default()
     };
 
-    match pods.create(&PostParams::default(), &pod).await {
-        Ok(_) => println!("Pod created successfully."),
-        Err(e) => println!("Failed to create pod: {:?}", e),
+    match jobs.create(&PostParams::default(), &job).await {
+        Ok(_) => println!("Job created successfully."),
+        Err(e) => println!("Failed to create job: {:?}", e),
     }
 }
 
