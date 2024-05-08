@@ -23,9 +23,13 @@ use warp::Filter;
 mod spotify_client;
 use crate::spotify_client::{AlbumTrack, ArtistAlbum, Items, SpotifyClient, SpotifySearchResponse};
 
+mod podcast_client;
+use crate::podcast_client::{PodcastClient, PodcastSearchResult};
+
 #[derive(Debug, Deserialize)]
 struct SelectQuery {
     titles: String,
+    r#type: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -138,7 +142,7 @@ async fn main() {
     let download_route = warp::post()
         .and(warp::path("download"))
         .and(warp::body::json())
-        .and_then(download_music);
+        .and_then(download);
     let routes = select_route.or(download_route);
 
     warp::serve(routes).run(([0, 0, 0, 0], 8080)).await;
@@ -150,69 +154,104 @@ async fn select_music(body: SelectQuery) -> Result<impl warp::Reply, warp::Rejec
     let client = SpotifyClient::new(client_id, secret);
 
     let titles = body.titles.split('\n');
+    let mut session: Vec<Vec<Choice>> = vec![];
 
-    let mut results: Vec<SpotifySearchResponse> = vec![];
-    for title in titles {
-        match client
-            .api_req(&format!(
-                "/search?q={}&type=track,album,artist",
-                encode(title.trim())
-            ))
-            .await
-        {
-            Ok(res) => match from_value::<SpotifySearchResponse>(res) {
-                Ok(result) => results.push(result),
-                Err(e) => println!("Failed to parse JSON: {:?}", e),
-            },
-            Err(e) => println!("Error: {:?}", e),
+    if body.r#type == "music" {
+        let mut results: Vec<SpotifySearchResponse> = vec![];
+        for title in titles {
+            match client
+                .api_req(&format!(
+                    "/search?q={}&type=track,album,artist",
+                    encode(title.trim())
+                ))
+                .await
+            {
+                Ok(res) => match from_value::<SpotifySearchResponse>(res) {
+                    Ok(result) => results.push(result),
+                    Err(e) => println!("Failed to parse JSON: {:?}", e),
+                },
+                Err(e) => println!("Error: {:?}", e),
+            }
+        }
+
+        for result in results {
+            let tracks = result.tracks.unwrap().items;
+            let albums = result.albums.unwrap().items;
+            let artists = result.artists.unwrap().items;
+
+            let mut track_count = 10;
+            let mut album_count = 5;
+            let mut artist_count = 3;
+
+            if albums.len() < album_count {
+                track_count += album_count - albums.len();
+                album_count = albums.len();
+            }
+            if artists.len() < artist_count {
+                track_count += artist_count - artists.len();
+                artist_count = artists.len();
+            }
+
+            let mut choices: Vec<Choice> = vec![];
+            for i in 0..cmp::min(track_count, tracks.len()) {
+                println!(
+                    "Track: {} - {} [{}]",
+                    tracks[i].name, tracks[i].album.artists[0].name, tracks[i].album.name
+                );
+                choices.push(Choice {
+                    r#type: "track".to_string(),
+                    id: tracks[i].id.clone(),
+                });
+            }
+            for i in 0..cmp::min(album_count, albums.len()) {
+                println!("Album: {} - {}", albums[i].name, albums[i].artists[0].name);
+                choices.push(Choice {
+                    r#type: "album".to_string(),
+                    id: albums[i].id.clone(),
+                });
+            }
+            for i in 0..cmp::min(artist_count, artists.len()) {
+                println!("Artist: {}", artists[i].name);
+                choices.push(Choice {
+                    r#type: "artist".to_string(),
+                    id: artists[i].id.clone(),
+                });
+            }
+            session.push(choices);
         }
     }
+    else if body.r#type == "podcast" {
+        let api_key = env::var("PODCAST_API_KEY").expect("Expected a podcast client id");
+        let secret = env::var("PODCAST_SECRET").expect("Expected a podcast secret");
+        let client = PodcastClient::new(api_key, secret);
 
-    let mut session: Vec<Vec<Choice>> = vec![];
-    for result in results {
-        let tracks = result.tracks.unwrap().items;
-        let albums = result.albums.unwrap().items;
-        let artists = result.artists.unwrap().items;
-
-        let mut track_count = 10;
-        let mut album_count = 5;
-        let mut artist_count = 3;
-
-        if albums.len() < album_count {
-            track_count += album_count - albums.len();
-            album_count = albums.len();
+        for title in titles {
+            match client
+                .api_req(&format!(
+                    "/search/byterm?q={}",
+                    encode(title.trim())
+                ))
+                .await {
+                    Ok(res) => match from_value::<PodcastSearchResult>(res) {
+                        Ok(result) => {
+                            let mut choices: Vec<Choice> = vec![];
+                            for podcast in result.feeds {
+                                println!(
+                                    "Podcast: {} - {}",
+                                    podcast.title, podcast.author
+                                );
+                                choices.push(Choice {
+                                    r#type: "podcast".to_string(),
+                                    id: podcast.id.to_string(),
+                                });
+                            }
+                            session.push(choices);
+                        }
+                        Err(e) => println!("Failed to parse JSON: {:?}", e),
+                    },
+                    Err(e) => println!("Error: {:?}", e),
+                }
         }
-        if artists.len() < artist_count {
-            track_count += artist_count - artists.len();
-            artist_count = artists.len();
-        }
-
-        let mut choices: Vec<Choice> = vec![];
-        for i in 0..cmp::min(track_count, tracks.len()) {
-            println!(
-                "Track: {} - {} [{}]",
-                tracks[i].name, tracks[i].album.artists[0].name, tracks[i].album.name
-            );
-            choices.push(Choice {
-                r#type: "track".to_string(),
-                id: tracks[i].id.clone(),
-            });
-        }
-        for i in 0..cmp::min(album_count, albums.len()) {
-            println!("Album: {} - {}", albums[i].name, albums[i].artists[0].name);
-            choices.push(Choice {
-                r#type: "album".to_string(),
-                id: albums[i].id.clone(),
-            });
-        }
-        for i in 0..cmp::min(artist_count, artists.len()) {
-            println!("Artist: {}", artists[i].name);
-            choices.push(Choice {
-                r#type: "artist".to_string(),
-                id: artists[i].id.clone(),
-            });
-        }
-        session.push(choices);
     }
     let session_id = Uuid::new_v4().to_string();
 
@@ -229,7 +268,7 @@ async fn select_music(body: SelectQuery) -> Result<impl warp::Reply, warp::Rejec
     Ok(warp::reply::json(&response))
 }
 
-async fn download_music(body: DownloadQuery) -> Result<impl warp::Reply, warp::Rejection> {
+async fn download(body: DownloadQuery) -> Result<impl warp::Reply, warp::Rejection> {
     let session_id = body.session_id;
     let indices: Vec<i8> = body.indices;
 
@@ -245,18 +284,15 @@ async fn download_music(body: DownloadQuery) -> Result<impl warp::Reply, warp::R
         }
     };
 
-    let client_id = env::var("SPOTIFY_CLIENT_ID").expect("Expected a client id");
-    let secret = env::var("SPOTIFY_CLIENT_SECRET").expect("Expected a secret");
-    let client = SpotifyClient::new(client_id, secret);
-
     tokio::spawn(async move {
         for (idx, choices) in indices.iter().zip(session.iter()) {
             let choice = &choices[*idx as usize];
 
             match choice.r#type.as_str() {
                 "track" => process_tracks(choice.id.clone()).await,
-                "album" => process_album(choice.id.clone(), &client).await,
-                "artist" => process_artist(choice.id.clone(), &client).await,
+                "album" => process_album(choice.id.clone()).await,
+                "artist" => process_artist(choice.id.clone()).await,
+                "podcast" => process_podcast(choice.id.clone()).await,
                 _ => {
                     println!("Unknown type: {}", choice.r#type);
                 }
@@ -264,6 +300,10 @@ async fn download_music(body: DownloadQuery) -> Result<impl warp::Reply, warp::R
         }
     });
     Ok(warp::reply::json(&session_id))
+}
+
+async fn process_podcast(podcast_id: String) {
+    /* Spawn new Kubernetes jobs for podcast downloading */
 }
 
 async fn process_tracks(track_ids: String) {
@@ -309,10 +349,14 @@ async fn process_tracks(track_ids: String) {
     }
 }
 
-async fn process_album(album_id: String, client: &SpotifyClient) {
+async fn process_album(album_id: String) {
+    let client_id = env::var("SPOTIFY_CLIENT_ID").expect("Expected a client id");
+    let secret = env::var("SPOTIFY_CLIENT_SECRET").expect("Expected a secret");
+    let client = SpotifyClient::new(client_id, secret);
+
     println!("Downloading album: {}", album_id);
 
-    let tracks: Vec<AlbumTrack> = collect_album_tracks(album_id, client).await;
+    let tracks: Vec<AlbumTrack> = collect_album_tracks(album_id, &client).await;
 
     let worker_size: usize = env::var("WORKER_SIZE")
         .unwrap_or_else(|_| "5".to_string())
@@ -327,7 +371,11 @@ async fn process_album(album_id: String, client: &SpotifyClient) {
     }
 }
 
-async fn process_artist(artist_id: String, client: &SpotifyClient) {
+async fn process_artist(artist_id: String) {
+    let client_id = env::var("SPOTIFY_CLIENT_ID").expect("Expected a client id");
+    let secret = env::var("SPOTIFY_CLIENT_SECRET").expect("Expected a secret");
+    let client = SpotifyClient::new(client_id, secret);
+
     println!("Downloading artist: {}", artist_id);
 
     let albums: Vec<ArtistAlbum> = {
@@ -364,7 +412,7 @@ async fn process_artist(artist_id: String, client: &SpotifyClient) {
 
     let mut all_tracks: Vec<AlbumTrack> = vec![];
     for album in albums {
-        all_tracks.append(&mut collect_album_tracks(album.id, client).await);
+        all_tracks.append(&mut collect_album_tracks(album.id, &client).await);
     }
 
     let worker_size: usize = env::var("WORKER_SIZE")
