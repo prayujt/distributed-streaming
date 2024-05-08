@@ -43,7 +43,7 @@ struct Choice {
 #[derive(Serialize)]
 struct SelectResponse {
     session_id: String,
-    choices: Vec<Vec<Choice>>,
+    choices: Vec<Vec<String>>,
 }
 
 lazy_static! {
@@ -169,6 +169,7 @@ async fn select_music(body: SelectQuery) -> Result<impl warp::Reply, warp::Rejec
     }
 
     let mut session: Vec<Vec<Choice>> = vec![];
+    let mut user_choices: Vec<Vec<String>> = vec![];
     for result in results {
         let tracks = result.tracks.unwrap().items;
         let albums = result.albums.unwrap().items;
@@ -177,6 +178,8 @@ async fn select_music(body: SelectQuery) -> Result<impl warp::Reply, warp::Rejec
         let mut track_count = 10;
         let mut album_count = 5;
         let mut artist_count = 3;
+
+        let mut user_choice: Vec<String> = vec![];
 
         if albums.len() < album_count {
             track_count += album_count - albums.len();
@@ -189,30 +192,32 @@ async fn select_music(body: SelectQuery) -> Result<impl warp::Reply, warp::Rejec
 
         let mut choices: Vec<Choice> = vec![];
         for i in 0..cmp::min(track_count, tracks.len()) {
-            println!(
+            user_choice.push(
+            format!(
                 "Track: {} - {} [{}]",
                 tracks[i].name, tracks[i].album.artists[0].name, tracks[i].album.name
-            );
+            ));
             choices.push(Choice {
                 r#type: "track".to_string(),
                 id: tracks[i].id.clone(),
             });
         }
         for i in 0..cmp::min(album_count, albums.len()) {
-            println!("Album: {} - {}", albums[i].name, albums[i].artists[0].name);
+            user_choice.push(format!("Album: {} - {}", albums[i].name, albums[i].artists[0].name));
             choices.push(Choice {
                 r#type: "album".to_string(),
                 id: albums[i].id.clone(),
             });
         }
         for i in 0..cmp::min(artist_count, artists.len()) {
-            println!("Artist: {}", artists[i].name);
+            user_choice.push(format!("Artist: {}", artists[i].name));
             choices.push(Choice {
                 r#type: "artist".to_string(),
                 id: artists[i].id.clone(),
             });
         }
         session.push(choices);
+        user_choices.push(user_choice)
     }
     let session_id = Uuid::new_v4().to_string();
 
@@ -223,7 +228,7 @@ async fn select_music(body: SelectQuery) -> Result<impl warp::Reply, warp::Rejec
 
     let response = SelectResponse {
         session_id,
-        choices: session,
+        choices: user_choices,
     };
 
     Ok(warp::reply::json(&response))
@@ -263,7 +268,7 @@ async fn download_music(body: DownloadQuery) -> Result<impl warp::Reply, warp::R
             }
         }
     });
-    Ok(warp::reply::json(&session_id))
+    Ok(warp::reply::json(&true))
 }
 
 async fn process_tracks(track_ids: String) {
