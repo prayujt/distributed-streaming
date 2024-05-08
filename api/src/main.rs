@@ -30,7 +30,7 @@ struct SelectQuery {
 
 #[derive(Debug, Deserialize)]
 struct DownloadQuery {
-    indices: Vec<i8>,
+    indices: String,
     session_id: String,
 }
 
@@ -43,7 +43,7 @@ struct Choice {
 #[derive(Serialize)]
 struct SelectResponse {
     session_id: String,
-    choices: Vec<Vec<String>>,
+    choices: Vec<String>,
 }
 
 lazy_static! {
@@ -169,7 +169,7 @@ async fn select_music(body: SelectQuery) -> Result<impl warp::Reply, warp::Rejec
     }
 
     let mut session: Vec<Vec<Choice>> = vec![];
-    let mut user_choices: Vec<Vec<String>> = vec![];
+    let mut user_choices: Vec<String> = vec![];
     for result in results {
         let tracks = result.tracks.unwrap().items;
         let albums = result.albums.unwrap().items;
@@ -217,7 +217,7 @@ async fn select_music(body: SelectQuery) -> Result<impl warp::Reply, warp::Rejec
             });
         }
         session.push(choices);
-        user_choices.push(user_choice)
+        user_choices.push(user_choice.join("|||"));
     }
     let session_id = Uuid::new_v4().to_string();
 
@@ -236,7 +236,10 @@ async fn select_music(body: SelectQuery) -> Result<impl warp::Reply, warp::Rejec
 
 async fn download_music(body: DownloadQuery) -> Result<impl warp::Reply, warp::Rejection> {
     let session_id = body.session_id;
-    let indices: Vec<i8> = body.indices;
+    let indices: Vec<i8> = match body.indices.split(',').map(|s| s.trim().parse::<i8>()).collect() {
+        Ok(vec) => vec,
+        Err(_) => vec![],
+    };
 
     let session = {
         let mut mutex_guard = match SESSION_CHOICES.lock() {
