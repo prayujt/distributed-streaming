@@ -1,9 +1,10 @@
-use std::collections::HashMap;
+use std::collections::{HashMap,VecDeque};
 use std::{env,cmp,fs};
 use std::sync::Mutex;
 
+
 use serde::{Deserialize, Serialize};
-use serde_json::{from_value};
+use serde_json::from_value;
 use urlencoding::encode;
 use uuid::Uuid;
 
@@ -40,7 +41,7 @@ struct Choice {
 #[derive(Serialize)]
 struct SelectResponse {
     session_id: String,
-    choices: Vec<Vec<Choice>>, // Assuming Choice is already defined and has Serialize derived
+    choices: Vec<Vec<Choice>>,
 }
 
 lazy_static! {
@@ -175,7 +176,7 @@ async fn download_music(body: DownloadQuery) -> Result<impl warp::Reply, warp::R
         let choice = &choices[*idx as usize];
 
         match choice.r#type.as_str() {
-            "track" => process_track(choice.id.clone(), &client).await,
+            "track" => process_tracks(choice.id.clone()).await,
             "album" => process_album(choice.id.clone(), &client).await,
             "artist" => process_artist(choice.id.clone(), &client).await,
             _ => {
@@ -186,9 +187,9 @@ async fn download_music(body: DownloadQuery) -> Result<impl warp::Reply, warp::R
     Ok(warp::reply::json(&session_id))
 }
 
-async fn process_track(track_id: String, _client: &SpotifyClient) {
+async fn process_tracks(track_ids: String) {
     /* Spawn new Kubernetes job for track downloading */
-    println!("Downloading track: {}", track_id);
+    println!("Downloading tracks: {}", track_ids);
     let namespace = get_kubernetes_namespace().unwrap_or_else(|_| "default".to_string());
     let client = Client::try_default().await.expect("Failed to create K8s client");
     let jobs: Api<Job> = Api::namespaced(client, &namespace);
@@ -215,7 +216,7 @@ async fn process_track(track_id: String, _client: &SpotifyClient) {
                             env: Some(vec![
                                 EnvVar {
                                     name: "TRACK_IDS".to_string(),
-                                    value: Some(track_id),
+                                    value: Some(track_ids),
                                     ..Default::default()
                                 },
                                 EnvVar {
@@ -272,14 +273,23 @@ async fn process_track(track_id: String, _client: &SpotifyClient) {
 
 async fn process_album(album_id: String, client: &SpotifyClient) {
     println!("Downloading album: {}", album_id);
+
+    let worker_size: usize = env::var("WORKER_SIZE")
+        .unwrap_or_else(|_| "4".to_string())
+        .parse()
+        .unwrap_or(4);
+
     match client
         .api_req(&format!("/albums/{}/tracks", album_id))
         .await
     {
         Ok(res) => match from_value::<Items<AlbumTrack>>(res) {
             Ok(tracks) => {
-                for track in tracks.items {
-                    process_track(track.id, client).await;
+                let mut queue = VecDeque::from(tracks.items);
+                while !queue.is_empty() {
+                    let group = queue.drain(..worker_size.min(queue.len())).collect::<Vec<_>>();
+                    let track_ids = group.iter().map(|track| track.id.as_str()).collect::<Vec<_>>().join(",");
+                    process_tracks(track_ids).await;
                 }
             }
             Err(e) => println!("Failed to parse JSON: {:?}", e),
