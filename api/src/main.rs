@@ -121,7 +121,7 @@ fn create_job_spec(track_ids: String) -> Job {
                 }),
             },
             backoff_limit: Some(0),
-            ttl_seconds_after_finished: Some(10),
+            ttl_seconds_after_finished: Some(1),
             ..Default::default()
         }),
         ..Default::default()
@@ -245,24 +245,24 @@ async fn download_music(body: DownloadQuery) -> Result<impl warp::Reply, warp::R
         }
     };
 
-    let it = indices.iter().zip(session.iter());
-
     let client_id = env::var("SPOTIFY_CLIENT_ID").expect("Expected a client id");
     let secret = env::var("SPOTIFY_CLIENT_SECRET").expect("Expected a secret");
     let client = SpotifyClient::new(client_id, secret);
 
-    for (idx, choices) in it {
-        let choice = &choices[*idx as usize];
+    tokio::spawn(async move {
+        for (idx, choices) in indices.iter().zip(session.iter()) {
+            let choice = &choices[*idx as usize];
 
-        match choice.r#type.as_str() {
-            "track" => process_tracks(choice.id.clone()).await,
-            "album" => process_album(choice.id.clone(), &client).await,
-            "artist" => process_artist(choice.id.clone(), &client).await,
-            _ => {
-                println!("Unknown type: {}", choice.r#type);
+            match choice.r#type.as_str() {
+                "track" => process_tracks(choice.id.clone()).await,
+                "album" => process_album(choice.id.clone(), &client).await,
+                "artist" => process_artist(choice.id.clone(), &client).await,
+                _ => {
+                    println!("Unknown type: {}", choice.r#type);
+                }
             }
         }
-    }
+    });
     Ok(warp::reply::json(&session_id))
 }
 
@@ -274,9 +274,9 @@ async fn process_tracks(track_ids: String) {
     let jobs: Api<Job> = Api::namespaced(client, &namespace);
 
     let max_jobs: usize = env::var("NUM_WORKERS")
-        .unwrap_or_else(|_| "10".to_string())
+        .unwrap_or_else(|_| "8".to_string())
         .parse()
-        .unwrap_or(10);
+        .unwrap_or(8);
 
     loop {
         let current_jobs = jobs.list(&ListParams::default()).await
@@ -300,7 +300,7 @@ async fn process_tracks(track_ids: String) {
             }
         } else {
             println!("Job limit reached. Waiting to retry...");
-            sleep(Duration::from_secs(10)).await;
+            sleep(Duration::from_secs(5)).await;
         }
     }
 }
@@ -311,9 +311,9 @@ async fn process_album(album_id: String, client: &SpotifyClient) {
     let tracks: Vec<AlbumTrack> = collect_album_tracks(album_id, client).await;
 
     let worker_size: usize = env::var("WORKER_SIZE")
-        .unwrap_or_else(|_| "3".to_string())
+        .unwrap_or_else(|_| "5".to_string())
         .parse()
-        .unwrap_or(3);
+        .unwrap_or(5);
 
     let mut queue = VecDeque::from(tracks);
     while !queue.is_empty() {
