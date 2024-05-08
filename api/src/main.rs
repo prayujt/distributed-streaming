@@ -277,7 +277,7 @@ async fn download_music(body: DownloadQuery) -> Result<impl warp::Reply, warp::R
 async fn process_tracks(track_ids: String) {
     /* Spawn new Kubernetes jobs for track downloading */
     println!("Downloading tracks: {}", track_ids);
-    if env::var("ENVIRONMENT").unwrap_or_else(|_| "development".to_string()).as_str().eq("development")
+    if env::var("ENVIRONMENT").unwrap_or_else(|_| "production".to_string()).as_str().eq("development")
     {
         return;
     }
