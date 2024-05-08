@@ -2,18 +2,20 @@ use std::collections::{HashMap,VecDeque};
 use std::{env,cmp,fs};
 use std::sync::Mutex;
 
-
 use serde::{Deserialize, Serialize};
 use serde_json::from_value;
 use urlencoding::encode;
 use uuid::Uuid;
+use tokio::time::{sleep, Duration};
 
 use k8s_openapi::api::batch::v1::{Job, JobSpec};
+
 use kube::{
-    api::{Api, PostParams, ObjectMeta},
+    api::{Api, ListParams, PostParams, ObjectMeta},
     Client,
 };
 use k8s_openapi::api::core::v1::{PodTemplateSpec, Container, EnvVar, Volume, PersistentVolumeClaimVolumeSource};
+
 
 use lazy_static::lazy_static;
 use warp::Filter;
@@ -47,6 +49,83 @@ struct SelectResponse {
 lazy_static! {
     static ref SESSION_CHOICES: Mutex<HashMap<String, Vec<Vec<Choice>>>> =
         Mutex::new(HashMap::new());
+}
+
+fn get_kubernetes_namespace() -> Result<String, std::io::Error> {
+    fs::read_to_string("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
+}
+
+fn create_job_spec(track_ids: String) -> Job {
+    let uuid = Uuid::new_v4().to_string().to_lowercase();
+    let job_name = format!("downloader-{}", uuid);
+
+    Job {
+        metadata: ObjectMeta {
+            name: Some(job_name),
+            ..Default::default()
+        },
+        spec: Some(JobSpec {
+            template: PodTemplateSpec {
+                metadata: Some(ObjectMeta {
+                    ..Default::default()
+                }),
+                spec: Some(k8s_openapi::api::core::v1::PodSpec {
+                    restart_policy: Some("Never".to_string()),
+                    containers: vec![
+                        Container {
+                            name: "downloader".to_string(),
+                            image: Some("docker.prayujt.com/distributed-streaming-downloader".to_string()),
+                            env: Some(vec![
+                                EnvVar {
+                                    name: "TRACK_IDS".to_string(),
+                                    value: Some(track_ids),
+                                    ..Default::default()
+                                },
+                                EnvVar {
+                                    name: "SPOTIFY_CLIENT_ID".to_string(),
+                                    value: Some(env::var("SPOTIFY_CLIENT_ID").unwrap_or_default()),
+                                    ..Default::default()
+                                },
+                                EnvVar {
+                                    name: "SPOTIFY_CLIENT_SECRET".to_string(),
+                                    value: Some(env::var("SPOTIFY_CLIENT_SECRET").unwrap_or_default()),
+                                    ..Default::default()
+                                },
+                                EnvVar {
+                                    name: "MUSIC_HOME".to_string(),
+                                    value: Some("/music".to_string()),
+                                    ..Default::default()
+                                },
+                            ]),
+                            volume_mounts: Some(vec![
+                                k8s_openapi::api::core::v1::VolumeMount {
+                                    name: "music-storage".to_string(),
+                                    mount_path: "/music".to_string(),
+                                    ..Default::default()
+                                },
+                            ]),
+                            ..Default::default()
+                        },
+                    ],
+                    volumes: Some(vec![
+                        Volume {
+                            name: "music-storage".to_string(),
+                            persistent_volume_claim: Some(PersistentVolumeClaimVolumeSource {
+                                claim_name: env::var("MUSIC_STORAGE_PVC").unwrap_or("music-storage".to_string()),
+                                ..Default::default()
+                            }),
+                            ..Default::default()
+                        },
+                    ]),
+                    ..Default::default()
+                }),
+            },
+            backoff_limit: Some(0),
+            ttl_seconds_after_finished: Some(10),
+            ..Default::default()
+        }),
+        ..Default::default()
+    }
 }
 
 #[tokio::main]
@@ -188,134 +267,127 @@ async fn download_music(body: DownloadQuery) -> Result<impl warp::Reply, warp::R
 }
 
 async fn process_tracks(track_ids: String) {
-    /* Spawn new Kubernetes job for track downloading */
+    /* Spawn new Kubernetes jobs for track downloading */
     println!("Downloading tracks: {}", track_ids);
     let namespace = get_kubernetes_namespace().unwrap_or_else(|_| "default".to_string());
     let client = Client::try_default().await.expect("Failed to create K8s client");
     let jobs: Api<Job> = Api::namespaced(client, &namespace);
 
-    let uuid = Uuid::new_v4().to_string().to_lowercase();
-    let job_name = format!("downloader-{}", uuid);
+    let max_jobs: usize = env::var("NUM_WORKERS")
+        .unwrap_or_else(|_| "10".to_string())
+        .parse()
+        .unwrap_or(10);
 
-    let job = Job {
-        metadata: ObjectMeta {
-            name: Some(job_name),
-            ..Default::default()
-        },
-        spec: Some(JobSpec {
-            template: PodTemplateSpec {
-                metadata: Some(ObjectMeta {
-                    ..Default::default()
-                }),
-                spec: Some(k8s_openapi::api::core::v1::PodSpec {
-                    restart_policy: Some("Never".to_string()),
-                    containers: vec![
-                        Container {
-                            name: "downloader".to_string(),
-                            image: Some("docker.prayujt.com/distributed-streaming-downloader".to_string()),
-                            env: Some(vec![
-                                EnvVar {
-                                    name: "TRACK_IDS".to_string(),
-                                    value: Some(track_ids),
-                                    ..Default::default()
-                                },
-                                EnvVar {
-                                    name: "SPOTIFY_CLIENT_ID".to_string(),
-                                    value: Some(env::var("SPOTIFY_CLIENT_ID").unwrap_or_default()),
-                                    ..Default::default()
-                                },
-                                EnvVar {
-                                    name: "SPOTIFY_CLIENT_SECRET".to_string(),
-                                    value: Some(env::var("SPOTIFY_CLIENT_SECRET").unwrap_or_default()),
-                                    ..Default::default()
-                                },
-                                EnvVar {
-                                    name: "MUSIC_HOME".to_string(),
-                                    value: Some("/music".to_string()),
-                                    ..Default::default()
-                                },
-                            ]),
-                            volume_mounts: Some(vec![
-                                k8s_openapi::api::core::v1::VolumeMount {
-                                    name: "music-storage".to_string(),
-                                    mount_path: "/music".to_string(),
-                                    ..Default::default()
-                                },
-                            ]),
-                            ..Default::default()
-                        },
-                    ],
-                    volumes: Some(vec![
-                        Volume {
-                            name: "music-storage".to_string(),
-                            persistent_volume_claim: Some(PersistentVolumeClaimVolumeSource {
-                                claim_name: env::var("MUSIC_STORAGE_PVC").unwrap_or("music-storage".to_string()),
-                                ..Default::default()
-                            }),
-                            ..Default::default()
-                        },
-                    ]),
-                    ..Default::default()
-                }),
-            },
-            backoff_limit: Some(0),
-            ttl_seconds_after_finished: Some(10),
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
+    loop {
+        let current_jobs = jobs.list(&ListParams::default()).await
+            .expect("Failed to list jobs")
+            .items
+            .into_iter()
+            .filter(|job| job.status.as_ref().map_or(false, |status| status.active.unwrap_or(0) > 0))
+            .count();
 
-    match jobs.create(&PostParams::default(), &job).await {
-        Ok(_) => println!("Job created successfully."),
-        Err(e) => println!("Failed to create job: {:?}", e),
+        if current_jobs < max_jobs {
+            let job = create_job_spec(track_ids.clone());
+            match jobs.create(&PostParams::default(), &job).await {
+                Ok(_) => {
+                    println!("Job created successfully.");
+                    break;
+                },
+                Err(e) => {
+                    println!("Failed to create job: {:?}", e);
+                    sleep(Duration::from_secs(10)).await;
+                }
+            }
+        } else {
+            println!("Job limit reached. Waiting to retry...");
+            sleep(Duration::from_secs(10)).await;
+        }
     }
 }
 
 async fn process_album(album_id: String, client: &SpotifyClient) {
     println!("Downloading album: {}", album_id);
 
-    let worker_size: usize = env::var("WORKER_SIZE")
-        .unwrap_or_else(|_| "4".to_string())
-        .parse()
-        .unwrap_or(4);
+    let tracks: Vec<AlbumTrack> = collect_album_tracks(album_id, client).await;
 
-    match client
-        .api_req(&format!("/albums/{}/tracks", album_id))
-        .await
-    {
-        Ok(res) => match from_value::<Items<AlbumTrack>>(res) {
-            Ok(tracks) => {
-                let mut queue = VecDeque::from(tracks.items);
-                while !queue.is_empty() {
-                    let group = queue.drain(..worker_size.min(queue.len())).collect::<Vec<_>>();
-                    let track_ids = group.iter().map(|track| track.id.as_str()).collect::<Vec<_>>().join(",");
-                    process_tracks(track_ids).await;
-                }
-            }
-            Err(e) => println!("Failed to parse JSON: {:?}", e),
-        },
-        Err(e) => println!("Error: {:?}", e),
+    let worker_size: usize = env::var("WORKER_SIZE")
+        .unwrap_or_else(|_| "3".to_string())
+        .parse()
+        .unwrap_or(3);
+
+    let mut queue = VecDeque::from(tracks);
+    while !queue.is_empty() {
+        let group = queue.drain(..worker_size.min(queue.len())).collect::<Vec<_>>();
+        let track_ids = group.iter().map(|track| track.id.as_str()).collect::<Vec<_>>().join(",");
+        process_tracks(track_ids).await;
     }
 }
 
 async fn process_artist(artist_id: String, client: &SpotifyClient) {
     println!("Downloading artist: {}", artist_id);
-    match client
+    let albums = match client
         .api_req(&format!("/artists/{}/albums", artist_id))
         .await
     {
         Ok(res) => match from_value::<Items<ArtistAlbum>>(res) {
-            Ok(albums) => {
-                for album in albums.items {
-                    process_album(album.id, client).await;
-                }
+            Ok(albums) => albums.items,
+            Err(e) => {
+                println!("Failed to parse JSON: {:?}", e);
+                vec![]
             }
-            Err(e) => println!("Failed to parse JSON: {:?}", e),
         },
-        Err(e) => println!("Error: {:?}", e),
+        Err(e) => {
+            println!("Error: {:?}", e);
+            vec![]
+        }
+    };
+
+    let mut all_tracks: Vec<AlbumTrack> = vec![];
+    for album in albums {
+        all_tracks.append(&mut collect_album_tracks(album.id, client).await);
+    }
+
+    let worker_size: usize = env::var("WORKER_SIZE")
+        .unwrap_or_else(|_| "4".to_string())
+        .parse()
+        .unwrap_or(4);
+
+    let mut queue = VecDeque::from(all_tracks);
+    while !queue.is_empty() {
+        let group = queue.drain(..worker_size.min(queue.len())).collect::<Vec<_>>();
+        let track_ids = group.iter().map(|track| track.id.as_str()).collect::<Vec<_>>().join(",");
+        process_tracks(track_ids).await;
     }
 }
 
-fn get_kubernetes_namespace() -> Result<String, std::io::Error> {
-    fs::read_to_string("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
+async fn collect_album_tracks(album_id: String, client: &SpotifyClient) -> Vec<AlbumTrack> {
+    let mut tracks: Vec<AlbumTrack> = vec![];
+    let mut offset = 0;
+    let limit = 50;
+
+    loop {
+        match client
+            .api_req(&format!("/albums/{}/tracks?offset={}&limit={}", album_id, offset, limit))
+            .await
+        {
+            Ok(res) => match from_value::<Items<AlbumTrack>>(res) {
+                Ok(mut result) => {
+                    tracks.append(&mut result.items);
+                    if result.items.len() < limit {
+                        break;
+                    }
+                    offset += limit;
+                }
+                Err(e) => {
+                    println!("Failed to parse JSON: {:?}", e);
+                    break;
+                }
+            },
+            Err(e) => {
+                println!("Error: {:?}", e);
+                break;
+            }
+        }
+    }
+    tracks
 }
