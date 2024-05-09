@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: distributed-streaming-music
+  namespace: distributed-streaming
+spec:
+  capacity:
+    storage: 50Gi
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  # insert spec here
+  storageClassName: distributed-streaming-music
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: distributed-streaming-music
+  namespace: distributed-streaming
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 50Gi
+  volumeName: distributed-streaming-music
+  storageClassName: distributed-streaming-music
