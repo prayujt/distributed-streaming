@@ -26,6 +26,10 @@ pub fn download_track(track: &Track, url: String) {
     let track_name_hash = format!("{:x}", hasher.finalize());
     let output_path = path.join(format!("{}.mp3", track_name_hash));
 
+    if output_path.exists() {
+        fs::remove_file(&output_path).expect("Failed to delete existing file");
+    }
+
     let output = Command::new("yt-dlp")
         .arg("-q")
         .arg("-x")
