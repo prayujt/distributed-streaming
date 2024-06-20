@@ -1,21 +1,22 @@
-use std::collections::{HashMap,VecDeque};
-use std::{env,cmp,fs};
+use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
+use std::{cmp, env, fs};
 
 use serde::{Deserialize, Serialize};
 use serde_json::from_value;
+use tokio::time::{sleep, Duration};
 use urlencoding::encode;
 use uuid::Uuid;
-use tokio::time::{sleep, Duration};
 
 use k8s_openapi::api::batch::v1::{Job, JobSpec};
 
+use k8s_openapi::api::core::v1::{
+    Container, EnvVar, PersistentVolumeClaimVolumeSource, PodTemplateSpec, Volume,
+};
 use kube::{
-    api::{Api, ListParams, PostParams, ObjectMeta},
+    api::{Api, ListParams, ObjectMeta, PostParams},
     Client,
 };
-use k8s_openapi::api::core::v1::{PodTemplateSpec, Container, EnvVar, Volume, PersistentVolumeClaimVolumeSource};
-
 
 use lazy_static::lazy_static;
 use warp::Filter;
@@ -71,52 +72,69 @@ fn create_job_spec(track_ids: String) -> Job {
                 }),
                 spec: Some(k8s_openapi::api::core::v1::PodSpec {
                     restart_policy: Some("Never".to_string()),
-                    containers: vec![
-                        Container {
-                            name: "downloader".to_string(),
-                            image: Some("docker.prayujt.com/distributed-streaming-downloader".to_string()),
-                            env: Some(vec![
-                                EnvVar {
-                                    name: "TRACK_IDS".to_string(),
-                                    value: Some(track_ids),
-                                    ..Default::default()
-                                },
-                                EnvVar {
-                                    name: "SPOTIFY_CLIENT_ID".to_string(),
-                                    value: Some(env::var("SPOTIFY_CLIENT_ID").unwrap_or_default()),
-                                    ..Default::default()
-                                },
-                                EnvVar {
-                                    name: "SPOTIFY_CLIENT_SECRET".to_string(),
-                                    value: Some(env::var("SPOTIFY_CLIENT_SECRET").unwrap_or_default()),
-                                    ..Default::default()
-                                },
-                                EnvVar {
-                                    name: "MUSIC_HOME".to_string(),
-                                    value: Some("/music".to_string()),
-                                    ..Default::default()
-                                },
-                            ]),
-                            volume_mounts: Some(vec![
-                                k8s_openapi::api::core::v1::VolumeMount {
-                                    name: "music-storage".to_string(),
-                                    mount_path: "/music".to_string(),
-                                    ..Default::default()
-                                },
-                            ]),
-                            ..Default::default()
-                        },
-                    ],
-                    volumes: Some(vec![
-                        Volume {
-                            name: "music-storage".to_string(),
-                            persistent_volume_claim: Some(PersistentVolumeClaimVolumeSource {
-                                claim_name: env::var("MUSIC_STORAGE_PVC").unwrap_or("music-storage".to_string()),
+                    containers: vec![Container {
+                        name: "downloader".to_string(),
+                        image: Some(
+                            "docker.prayujt.com/distributed-streaming-downloader".to_string(),
+                        ),
+                        env: Some(vec![
+                            EnvVar {
+                                name: "TRACK_IDS".to_string(),
+                                value: Some(track_ids),
                                 ..Default::default()
-                            }),
+                            },
+                            EnvVar {
+                                name: "SPOTIFY_CLIENT_ID".to_string(),
+                                value: Some(env::var("SPOTIFY_CLIENT_ID").unwrap_or_default()),
+                                ..Default::default()
+                            },
+                            EnvVar {
+                                name: "SPOTIFY_CLIENT_SECRET".to_string(),
+                                value: Some(env::var("SPOTIFY_CLIENT_SECRET").unwrap_or_default()),
+                                ..Default::default()
+                            },
+                            EnvVar {
+                                name: "MUSIC_HOME".to_string(),
+                                value: Some("/music".to_string()),
+                                ..Default::default()
+                            },
+                            EnvVar {
+                                name: "SUBSONIC_URL".to_string(),
+                                value: Some(env::var("SUBSONIC_URL").unwrap_or_default()),
+                                ..Default::default()
+                            },
+                            EnvVar {
+                                name: "SUBSONIC_PORT".to_string(),
+                                value: Some(env::var("SUBSONIC_PORT").unwrap_or_default()),
+                                ..Default::default()
+                            },
+                            EnvVar {
+                                name: "SUBSONIC_USERNAME".to_string(),
+                                value: Some(env::var("SUBSONIC_USERNAME").unwrap_or_default()),
+                                ..Default::default()
+                            },
+                            EnvVar {
+                                name: "SUBSONIC_PASSWORD".to_string(),
+                                value: Some(env::var("SUBSONIC_PASSWORD").unwrap_or_default()),
+                                ..Default::default()
+                            },
+                        ]),
+                        volume_mounts: Some(vec![k8s_openapi::api::core::v1::VolumeMount {
+                            name: "music-storage".to_string(),
+                            mount_path: "/music".to_string(),
                             ..Default::default()
-                        },
-                    ]),
+                        }]),
+                        ..Default::default()
+                    }],
+                    volumes: Some(vec![Volume {
+                        name: "music-storage".to_string(),
+                        persistent_volume_claim: Some(PersistentVolumeClaimVolumeSource {
+                            claim_name: env::var("MUSIC_STORAGE_PVC")
+                                .unwrap_or("music-storage".to_string()),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    }]),
                     ..Default::default()
                 }),
             },
@@ -192,8 +210,7 @@ async fn select_music(body: SelectQuery) -> Result<impl warp::Reply, warp::Rejec
 
         let mut choices: Vec<Choice> = vec![];
         for i in 0..cmp::min(track_count, tracks.len()) {
-            user_choice.push(
-            format!(
+            user_choice.push(format!(
                 "Track: {} - {} [{}]",
                 tracks[i].name, tracks[i].album.artists[0].name, tracks[i].album.name
             ));
@@ -203,7 +220,10 @@ async fn select_music(body: SelectQuery) -> Result<impl warp::Reply, warp::Rejec
             });
         }
         for i in 0..cmp::min(album_count, albums.len()) {
-            user_choice.push(format!("Album: {} - {}", albums[i].name, albums[i].artists[0].name));
+            user_choice.push(format!(
+                "Album: {} - {}",
+                albums[i].name, albums[i].artists[0].name
+            ));
             choices.push(Choice {
                 r#type: "album".to_string(),
                 id: albums[i].id.clone(),
@@ -236,7 +256,12 @@ async fn select_music(body: SelectQuery) -> Result<impl warp::Reply, warp::Rejec
 
 async fn download_music(body: DownloadQuery) -> Result<impl warp::Reply, warp::Rejection> {
     let session_id = body.session_id;
-    let indices: Vec<i8> = match body.indices.split(',').map(|s| s.trim().parse::<i8>()).collect() {
+    let indices: Vec<i8> = match body
+        .indices
+        .split(',')
+        .map(|s| s.trim().parse::<i8>())
+        .collect()
+    {
         Ok(vec) => vec,
         Err(_) => vec![],
     };
@@ -277,12 +302,17 @@ async fn download_music(body: DownloadQuery) -> Result<impl warp::Reply, warp::R
 async fn process_tracks(track_ids: String) {
     /* Spawn new Kubernetes jobs for track downloading */
     println!("Downloading tracks: {}", track_ids);
-    if env::var("ENVIRONMENT").unwrap_or_else(|_| "production".to_string()).as_str().eq("development")
+    if env::var("ENVIRONMENT")
+        .unwrap_or_else(|_| "production".to_string())
+        .as_str()
+        .eq("development")
     {
         return;
     }
     let namespace = get_kubernetes_namespace().unwrap_or_else(|_| "default".to_string());
-    let client = Client::try_default().await.expect("Failed to create K8s client");
+    let client = Client::try_default()
+        .await
+        .expect("Failed to create K8s client");
     let jobs: Api<Job> = Api::namespaced(client, &namespace);
 
     let max_jobs: usize = env::var("NUM_WORKERS")
@@ -291,11 +321,17 @@ async fn process_tracks(track_ids: String) {
         .unwrap_or(8);
 
     loop {
-        let current_jobs = jobs.list(&ListParams::default()).await
+        let current_jobs = jobs
+            .list(&ListParams::default())
+            .await
             .expect("Failed to list jobs")
             .items
             .into_iter()
-            .filter(|job| job.status.as_ref().map_or(false, |status| status.active.unwrap_or(0) > 0))
+            .filter(|job| {
+                job.status
+                    .as_ref()
+                    .map_or(false, |status| status.active.unwrap_or(0) > 0)
+            })
             .count();
 
         if current_jobs < max_jobs {
@@ -304,7 +340,7 @@ async fn process_tracks(track_ids: String) {
                 Ok(_) => {
                     println!("Job created successfully.");
                     break;
-                },
+                }
                 Err(e) => {
                     println!("Failed to create job: {:?}", e);
                     sleep(Duration::from_secs(10)).await;
@@ -329,8 +365,14 @@ async fn process_album(album_id: String, client: &SpotifyClient) {
 
     let mut queue = VecDeque::from(tracks);
     while !queue.is_empty() {
-        let group = queue.drain(..worker_size.min(queue.len())).collect::<Vec<_>>();
-        let track_ids = group.iter().map(|track| track.id.as_str()).collect::<Vec<_>>().join(",");
+        let group = queue
+            .drain(..worker_size.min(queue.len()))
+            .collect::<Vec<_>>();
+        let track_ids = group
+            .iter()
+            .map(|track| track.id.as_str())
+            .collect::<Vec<_>>()
+            .join(",");
         process_tracks(track_ids).await;
     }
 }
@@ -345,7 +387,10 @@ async fn process_artist(artist_id: String, client: &SpotifyClient) {
 
         loop {
             match client
-                .api_req(&format!("/artists/{}/albums?offset={}&limit={}", artist_id, offset, limit))
+                .api_req(&format!(
+                    "/artists/{}/albums?offset={}&limit={}",
+                    artist_id, offset, limit
+                ))
                 .await
             {
                 Ok(res) => match from_value::<Items<ArtistAlbum>>(res) {
@@ -382,8 +427,14 @@ async fn process_artist(artist_id: String, client: &SpotifyClient) {
 
     let mut queue = VecDeque::from(all_tracks);
     while !queue.is_empty() {
-        let group = queue.drain(..worker_size.min(queue.len())).collect::<Vec<_>>();
-        let track_ids = group.iter().map(|track| track.id.as_str()).collect::<Vec<_>>().join(",");
+        let group = queue
+            .drain(..worker_size.min(queue.len()))
+            .collect::<Vec<_>>();
+        let track_ids = group
+            .iter()
+            .map(|track| track.id.as_str())
+            .collect::<Vec<_>>()
+            .join(",");
         process_tracks(track_ids).await;
     }
 }
@@ -395,7 +446,10 @@ async fn collect_album_tracks(album_id: String, client: &SpotifyClient) -> Vec<A
 
     loop {
         match client
-            .api_req(&format!("/albums/{}/tracks?offset={}&limit={}", album_id, offset, limit))
+            .api_req(&format!(
+                "/albums/{}/tracks?offset={}&limit={}",
+                album_id, offset, limit
+            ))
             .await
         {
             Ok(res) => match from_value::<Items<AlbumTrack>>(res) {
