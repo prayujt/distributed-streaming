@@ -88,7 +88,7 @@ async fn main() {
     let encoded_password = encode(&subsonic_password);
 
     let curl_url = format!(
-        "{}:{}/rest/ping.view?u={}&p={}&v=1.15.0&c=CLI",
+        "{}:{}/rest/startScan?u={}&p={}&v=1.15.0&c=CLI",
         subsonic_url, subsonic_port, encoded_username, encoded_password
     );
 
