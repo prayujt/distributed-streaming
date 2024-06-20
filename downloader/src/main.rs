@@ -4,6 +4,7 @@ use std::process::Command;
 use dotenv;
 
 use serde_json::from_value;
+use urlencoding::encode;
 
 mod spotify_client;
 use crate::spotify_client::{SpotifyClient, Tracks};
@@ -45,7 +46,6 @@ async fn main() {
     let client = SpotifyClient::new(client_id, secret);
 
     let track_ids = env::var("TRACK_IDS").expect("Expected track ids");
-    // track_ids = track_ids.split(",").map(|s| s.to_string()).collect();
 
     let tracks = match client.api_req(&format!("/tracks?ids={}", track_ids)).await {
         Ok(res) => match from_value::<Tracks>(res) {
@@ -77,5 +77,35 @@ async fn main() {
                 println!("Error retrieving yt_music url: {}", e)
             }
         };
+    }
+
+    let subsonic_url = env::var("SUBSONIC_URL").expect("Expected a subsonic url");
+    let subsonic_port = env::var("SUBSONIC_PORT").expect("Expected a subsonic port");
+    let subsonic_username = env::var("SUBSONIC_USERNAME").expect("Expected a subsonic username");
+    let subsonic_password = env::var("SUBSONIC_PASSWORD").expect("Expected a subsonic password");
+
+    let encoded_username = encode(&subsonic_username);
+    let encoded_password = encode(&subsonic_password);
+
+    let curl_url = format!(
+        "{}:{}/rest/ping.view?u={}&p={}&v=1.15.0&c=CLI",
+        subsonic_url, subsonic_port, encoded_username, encoded_password
+    );
+
+    let curl_output = Command::new("curl")
+        .arg(&curl_url)
+        .output()
+        .expect("Failed to execute curl command");
+
+    if curl_output.status.success() {
+        println!(
+            "Curl request successful: {}",
+            String::from_utf8_lossy(&curl_output.stdout)
+        );
+    } else {
+        println!(
+            "Error in curl request: {}",
+            String::from_utf8_lossy(&curl_output.stderr)
+        );
     }
 }
