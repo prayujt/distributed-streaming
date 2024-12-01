@@ -72,6 +72,10 @@ fn create_job_spec(track_ids: String) -> Job {
                 }),
                 spec: Some(k8s_openapi::api::core::v1::PodSpec {
                     restart_policy: Some("Never".to_string()),
+                    node_selector: Some(std::collections::BTreeMap::from([(
+                        "kubernetes.io/arch".to_string(),
+                        "arm64".to_string(),
+                    )])),
                     containers: vec![Container {
                         name: "downloader".to_string(),
                         image: Some(
